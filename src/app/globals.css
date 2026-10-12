@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+:root {
+  --background: #070b14;
+  --foreground: #e8eefc;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100vh;
+}
+
+.desk-bg {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(245, 158, 11, 0.18), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(56, 189, 248, 0.12), transparent 50%),
+    radial-gradient(700px 400px at 50% 100%, rgba(244, 63, 94, 0.08), transparent 45%),
+    #070b14;
+}
