@@ -50,8 +50,35 @@ When `MINIMAX_API_KEY` is set, triage uses MiniMax (OpenAI-compatible chat). Wit
 
 1. Open the desk → see mock disputes + overdue invoices.
 2. Click `PP-D-401` (item not received) → Steward recommends partial refund + draft apology.
-3. Edit the draft if you want → **Approve & stage** → audit log shows mock/sandbox result.
-4. Click an overdue invoice → draft reminder → approve send-reminder stub.
+3. Edit the draft if you want → **Approve & stage** → the governance ledger shows the mock/sandbox result.
+4. Change the refund amount to more than 50% of the dispute (e.g. `120.00`) → **blocked by policy**, logged.
+5. Approve again on the same dispute → **blocked** (no second money move on one case).
+6. Click an overdue invoice → draft reminder → approve send-reminder stub.
+
+## Governance: the model proposes, the server decides
+
+The browser and the LLM only *propose* an action. `src/lib/steward/policy.ts` re-derives it from the
+case on file before anything reaches PayPal:
+
+| Rule | Why |
+|---|---|
+| Action type must fit the case kind (refunds only on disputes, reminders only on invoices) | A confused model can't refund an invoice |
+| Full refund amount is reset to the disputed amount; client amounts are ignored | No inflated refunds from a tampered request |
+| Partial refund: positive, ≤ 2 decimals, same currency, ≤ 50% of the dispute (`STEWARD_MAX_PARTIAL_RATIO`) | Goodwill stays goodwill |
+| Capture ID always comes from the case, never from the note | Can't redirect a refund to another capture |
+| No refund while PayPal has the case `UNDER_REVIEW`, or once `RESOLVED` | Evidence first, no double payouts |
+| At most one money move per case | Idempotency against double clicks / replays |
+| Refunds ≥ `STEWARD_HIGH_VALUE_THRESHOLD` (default 250) need a second confirmation | Two-step approval for big money |
+
+Every triage, block, execution and failure is appended to a SHA-256 **hash-chained ledger**
+(`src/lib/steward/audit.ts`, `GET /api/audit`). Editing any earlier entry breaks `verifyChain()`, and
+the desk shows "chain verified". The ledger is in-memory per server instance in this demo.
+
+Run the policy and ledger tests:
+
+```bash
+npm test   # 10 node:test cases: caps, currency, capture pinning, idempotency, tamper detection
+```
 
 ## API
 
@@ -59,7 +86,8 @@ When `MINIMAX_API_KEY` is set, triage uses MiniMax (OpenAI-compatible chat). Wit
 |---|---|---|
 | GET | `/api/cases` | List disputes + invoices (`mock` or `sandbox`) |
 | POST | `/api/triage` | `{ "case_id": "PP-D-401" }` → triage + staged action |
-| POST | `/api/actions` | `{ "approved": true, "action": { ... } }` → execute |
+| POST | `/api/actions` | `{ "approved": true, "confirm_high_value"?: true, "action": { ... } }` → policy check → execute (422 + reasons if blocked) |
+| GET | `/api/audit` | Hash-chained governance ledger + `chain.valid` |
 
 ## Stack
 

@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "tsc -p tsconfig.test.json && node --test .test-build/tests/"
   },
   "dependencies": {
     "react": "19.1.0",
@@ -24,5 +25,5 @@
     "eslint-config-next": "15.5.27",
     "@eslint/eslintrc": "^3"
   },
-  "description": "AI steward for PayPal disputes and invoices — PayPal AI Hackathon 2026"
+  "description": "AI steward for PayPal disputes and invoices \u2014 PayPal AI Hackathon 2026"
 }

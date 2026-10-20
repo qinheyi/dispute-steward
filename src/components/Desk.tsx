@@ -19,6 +19,32 @@ interface AuditEntry {
   text: string;
 }
 
+interface ServerAuditEntry {
+  seq: number;
+  at: string;
+  event: "triaged" | "blocked" | "executed" | "failed";
+  case_id: string;
+  action_type?: string;
+  amount?: { currency_code: string; value: string };
+  actor: string;
+  detail: string;
+  paypal_ref?: string;
+  hash: string;
+}
+
+interface AuditPayload {
+  count: number;
+  chain: { valid: boolean; brokenAt?: number };
+  entries: ServerAuditEntry[];
+}
+
+function eventColor(e: ServerAuditEntry["event"]) {
+  if (e === "executed") return "text-emerald-300";
+  if (e === "blocked") return "text-rose-300";
+  if (e === "failed") return "text-orange-300";
+  return "text-sky-300";
+}
+
 function money(c?: { currency_code: string; value: string }) {
   if (!c) return "—";
   return `${c.currency_code} ${c.value}`;
@@ -48,6 +74,18 @@ export default function Desk() {
   const [error, setError] = useState<string | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [showReasoning, setShowReasoning] = useState(true);
+  const [ledger, setLedger] = useState<AuditPayload | null>(null);
+  const [refundValue, setRefundValue] = useState("");
+  const [policyNotes, setPolicyNotes] = useState<string[]>([]);
+
+  const loadLedger = useCallback(async () => {
+    try {
+      const res = await fetch("/api/audit", { cache: "no-store" });
+      if (res.ok) setLedger((await res.json()) as AuditPayload);
+    } catch {
+      /* ledger is best-effort in the UI */
+    }
+  }, []);
 
   const pushAudit = useCallback((text: string) => {
     setAudit((a) => [{ at: new Date().toLocaleTimeString(), text }, ...a].slice(0, 20));
@@ -89,6 +127,9 @@ export default function Desk() {
       if (!res.ok) throw new Error(data.error || "Triage failed");
       setTriage(data.triage);
       setDraft(data.triage.draft_reply);
+      setRefundValue(data.triage.staged_action.amount?.value ?? "");
+      setPolicyNotes([]);
+      void loadLedger();
       pushAudit(
         `Triaged ${id} → ${data.triage.recommended_action} (${data.triage.source}, conf ${data.triage.confidence.toFixed(2)})`
       );
@@ -103,23 +144,54 @@ export default function Desk() {
     if (!triage) return;
     setActing(true);
     setError(null);
+    setPolicyNotes([]);
     try {
+      const base = triage.staged_action;
       const staged = {
-        ...triage.staged_action,
-        note: draft.slice(0, 500) || triage.staged_action.note,
+        ...base,
+        note: draft.slice(0, 500) || base.note,
+        amount:
+          base.amount && refundValue
+            ? { currency_code: base.amount.currency_code, value: refundValue.trim() }
+            : base.amount,
       };
-      const res = await fetch("/api/actions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ approved: true, action: staged }),
-      });
-      const data = (await res.json()) as ActionResult & { error?: string };
+      const send = (confirmHighValue: boolean) =>
+        fetch("/api/actions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ approved: true, confirm_high_value: confirmHighValue, action: staged }),
+        });
+
+      let res = await send(false);
+      let data = (await res.json()) as ActionResult & {
+        error?: string;
+        needs_high_value_confirmation?: boolean;
+        policy?: { violations?: string[]; adjustments?: string[] };
+      };
+      if (
+        res.status === 422 &&
+        data.needs_high_value_confirmation &&
+        (data.policy?.violations?.length ?? 0) === 1 &&
+        window.confirm(
+          `High-value refund: ${staged.amount?.currency_code} ${staged.amount?.value} on ${staged.case_id}. Confirm a second time?`
+        )
+      ) {
+        res = await send(true);
+        data = (await res.json()) as typeof data;
+      }
+      if (res.status === 422) {
+        setPolicyNotes(data.policy?.violations ?? [data.error || "Blocked by policy"]);
+        pushAudit(`⛔ policy blocked ${staged.type} on ${staged.case_id}`);
+        return;
+      }
       if (!res.ok) throw new Error(data.error || data.message || "Action failed");
+      setPolicyNotes((data.policy?.adjustments ?? []).map((a) => `adjusted: ${a}`));
       pushAudit(`✓ ${data.message}${data.paypal_ref ? ` [${data.paypal_ref}]` : ""}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setActing(false);
+      void loadLedger();
     }
   }
 
@@ -284,6 +356,25 @@ export default function Desk() {
                     ? ` · ${money(triage.staged_action.amount)}`
                     : ""}
                 </p>
+                {triage.staged_action.type === "partial_refund" && triage.staged_action.amount && (
+                  <label className="mt-2 flex items-center gap-2 text-xs text-slate-300">
+                    Refund amount ({triage.staged_action.amount.currency_code})
+                    <input
+                      value={refundValue}
+                      onChange={(e) => setRefundValue(e.target.value)}
+                      inputMode="decimal"
+                      className="w-28 rounded-md border border-white/15 bg-black/30 px-2 py-1 font-mono text-sm text-white outline-none focus:border-amber-400/50"
+                    />
+                    <span className="text-slate-500">policy caps partial refunds at 50% of the dispute</span>
+                  </label>
+                )}
+                {policyNotes.length > 0 && (
+                  <ul className="mt-2 space-y-1 rounded-lg border border-rose-400/30 bg-rose-500/10 p-2 text-xs text-rose-100">
+                    {policyNotes.map((n, i) => (
+                      <li key={i}>{n}</li>
+                    ))}
+                  </ul>
+                )}
                 <button
                   type="button"
                   disabled={acting}
@@ -299,7 +390,7 @@ export default function Desk() {
       </div>
 
       <section className="rounded-2xl border border-white/10 bg-slate-900/40 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-300">Audit log</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-300">Session activity (this browser)</h2>
         {audit.length === 0 ? (
           <p className="mt-2 text-sm text-slate-500">No actions yet.</p>
         ) : (
@@ -307,6 +398,40 @@ export default function Desk() {
             {audit.map((a, i) => (
               <li key={`${a.at}-${i}`}>
                 <span className="text-slate-500">[{a.at}]</span> {a.text}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="rounded-2xl border border-white/10 bg-slate-900/40 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-300">
+            Governance ledger (server, hash-chained)
+          </h2>
+          {ledger && (
+            <span
+              className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                ledger.chain.valid
+                  ? "border-emerald-400/40 text-emerald-200"
+                  : "border-rose-400/40 text-rose-200"
+              }`}
+            >
+              {ledger.chain.valid ? `chain verified · ${ledger.count} entries` : `chain broken at #${ledger.chain.brokenAt}`}
+            </span>
+          )}
+        </div>
+        {!ledger || ledger.entries.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">Triage a case to start the ledger.</p>
+        ) : (
+          <ul className="mt-2 space-y-1 font-mono text-xs text-slate-400">
+            {ledger.entries.slice(0, 15).map((e) => (
+              <li key={e.seq}>
+                <span className="text-slate-500">#{e.seq}</span>{" "}
+                <span className={eventColor(e.event)}>{e.event}</span> {e.case_id}
+                {e.action_type ? ` · ${e.action_type}` : ""}
+                {e.amount ? ` · ${money(e.amount)}` : ""} — {e.detail}{" "}
+                <span className="text-slate-600">{e.hash.slice(0, 10)}…</span>
               </li>
             ))}
           </ul>
