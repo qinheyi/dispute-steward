@@ -100,7 +100,7 @@ npm test   # 10 node:test cases: caps, currency, capture pinning, idempotency, t
 
 - Contest: [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/)
 - Deadline: 2026-11-13 04:00 Beijing
-- This repo is a scaffold + runnable demo; full polish continues after Graph Hacks / Amazon Entry Gate deadlines.
+- Submission draft: [docs/SUBMISSION_DRAFT_EN.md](docs/SUBMISSION_DRAFT_EN.md) · video script: [docs/DEMO_VIDEO_SCRIPT.md](docs/DEMO_VIDEO_SCRIPT.md)
 
 ## Author
 
